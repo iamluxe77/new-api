@@ -63,12 +63,7 @@ func BuildDurableVideoTask(ctx context.Context, task *model.Task, intake *model.
 		if code == "" {
 			code = "task_failed"
 		}
-		message := map[string]string{"invalid_input": "Invalid task input", "unsupported_input": "Unsupported task input",
-			"content_policy_violation": "Task content was rejected", "invalid_reference_geometry": "Invalid reference image geometry"}[code]
-		if message == "" {
-			message = "Task failed"
-		}
-		base["error"] = map[string]any{"code": code, "message": message}
+		base["error"] = map[string]any{"code": code, "message": model.TaskPublicFailureMessage(code)}
 	}
 	var frozenBilling DurableTaskBillingSnapshot
 	if err := common.Unmarshal(intake.BillingSnapshot, &frozenBilling); err != nil {

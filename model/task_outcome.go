@@ -14,6 +14,24 @@ import (
 
 const MaxPendingTaskOutcomeBytes = 128 << 20
 
+// TaskPublicFailureMessage maps trusted semantic codes to fixed public text.
+func TaskPublicFailureMessage(code string) string {
+	switch code {
+	case "invalid_input":
+		return "Invalid task input"
+	case "unsupported_input":
+		return "Unsupported task input"
+	case "content_policy_violation":
+		return "Task content was rejected"
+	case "invalid_reference_geometry":
+		return "Invalid reference image geometry"
+	case "reference_unavailable":
+		return "The reference files could not be loaded. Please contact support."
+	default:
+		return "Task failed"
+	}
+}
+
 // PendingTaskOutcome is the private primary-DB recovery input, not a second
 // ledger. It is written before terminal money or public Task state changes.
 type PendingTaskOutcome struct {

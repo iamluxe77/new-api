@@ -338,7 +338,7 @@ func PersistUncertainFinalFailure(ctx context.Context, taskID int64, retainResul
 			}
 		}
 		outcome = TaskOutcome{Status: TaskStatusFailure, ActualQuota: 0, ErrorCode: attempts[len(attempts)-1].WatchPublicErrorCode,
-			FailReason: "Task failed", RetainResult: retainResult}
+			FailReason: TaskPublicFailureMessage(attempts[len(attempts)-1].WatchPublicErrorCode), RetainResult: retainResult}
 		if err := validateTaskOutcome(outcome); err != nil {
 			return err
 		}
