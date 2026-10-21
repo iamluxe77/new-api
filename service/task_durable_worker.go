@@ -520,7 +520,7 @@ func processDurableTask(ctx context.Context, taskID int64) error {
 		if attempt.ReceiptKind == "not_accepted" {
 			reason = "Task could not be accepted by provider"
 		}
-		if attempt.PublicErrorCode == "reference_unavailable" {
+		if attempt.PublicErrorCode == "reference_unavailable" || attempt.PublicErrorCode == "reference_not_ready" {
 			reason = model.TaskPublicFailureMessage(attempt.PublicErrorCode)
 		}
 		outcome := model.TaskOutcome{Status: model.TaskStatusFailure, ActualQuota: 0,
@@ -770,7 +770,7 @@ func durableOutcomeFromResult(ctx context.Context, taskID int64, intake *model.T
 	outcome := model.TaskOutcome{Status: result.Status, ActualQuota: quota, TaskID: result.UpstreamID,
 		Data: result.Data, ResultURL: result.ResultURL, PluginState: result.PluginState,
 		RetainResult: routing.RetainResult, ErrorCode: result.PublicErrorCode, FailReason: "Task failed"}
-	if result.PublicErrorCode == "reference_unavailable" {
+	if result.PublicErrorCode == "reference_unavailable" || result.PublicErrorCode == "reference_not_ready" {
 		outcome.FailReason = model.TaskPublicFailureMessage(result.PublicErrorCode)
 	}
 	if len(mergedFacts) > 0 {

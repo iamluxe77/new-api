@@ -27,6 +27,8 @@ func TaskPublicFailureMessage(code string) string {
 		return "Invalid reference image geometry"
 	case "reference_unavailable":
 		return "The reference files could not be loaded. Please contact support."
+	case "reference_not_ready":
+		return "The reference media is awaiting certification. Please wait until certification is complete."
 	default:
 		return "Task failed"
 	}
