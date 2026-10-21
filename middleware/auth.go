@@ -458,117 +458,97 @@ func TokenOrUserAuth() func(c *gin.Context) {
 // 仍然检查令牌 IP 白名单和用户是否被封禁。
 func TokenAuthReadOnly() func(c *gin.Context) {
 	return func(c *gin.Context) {
-		key := c.Request.Header.Get("Authorization")
-		if key == "" {
-			common.ApiErrorStatus(c, http.StatusUnauthorized, errors.New(common.TranslateMessage(c, i18n.MsgTokenNotProvided)))
-			c.Abort()
+		if !authenticateTokenReadOnly(c) {
 			return
 		}
-		if strings.HasPrefix(key, "Bearer ") || strings.HasPrefix(key, "bearer ") {
-			key = strings.TrimSpace(key[7:])
-		}
-		key = strings.TrimPrefix(key, "sk-")
-		parts := strings.Split(key, "-")
-		key = parts[0]
-
-		token, err := model.GetTokenByKey(key, false)
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				common.ApiErrorStatus(c, http.StatusUnauthorized, errors.New(common.TranslateMessage(c, i18n.MsgTokenInvalid)))
-			} else {
-				common.SysLog(common.LogText("TokenAuthReadOnly GetTokenByKey database error: %s", err.Error()))
-				common.ApiErrorStatus(c, http.StatusInternalServerError, errors.New(common.TranslateMessage(c, i18n.MsgDatabaseError)))
-			}
-			c.Abort()
-			return
-		}
-
-		// TokenAuthReadOnly must keep allowing other token states to query read-only
-		// data, such as token usage logs; only explicitly disabled tokens are denied.
-		if token.Status == common.TokenStatusDisabled {
-			common.ApiErrorStatus(c, http.StatusUnauthorized, errors.New(common.TranslateMessage(c, i18n.MsgTokenStatusUnavailable)))
-			c.Abort()
-			return
-		}
-
-		if allowIps := token.GetIpLimits(); len(allowIps) > 0 {
-			ip := net.ParseIP(c.ClientIP())
-			if ip == nil {
-				common.ApiErrorStatus(c, http.StatusForbidden, errors.New(common.TranslateMessage(c, i18n.MsgAuthClientIPUnresolved)))
-				c.Abort()
-				return
-			}
-			if !common.IsIpInCIDRList(ip, allowIps) {
-				common.ApiErrorStatus(c, http.StatusForbidden, errors.New(common.TranslateMessage(c, i18n.MsgAuthTokenIPNotAllowed)))
-				c.Abort()
-				return
-			}
-		}
-
-		userCache, err := model.GetUserCache(token.UserId)
-		if err != nil {
-			common.SysLog(common.LogText("TokenAuthReadOnly GetUserCache error for user %d: %v", token.UserId, err))
-			common.ApiErrorStatus(c, http.StatusInternalServerError, errors.New(common.TranslateMessage(c, i18n.MsgDatabaseError)))
-			c.Abort()
-			return
-		}
-		if userCache.Status != common.UserStatusEnabled {
-			common.ApiErrorStatus(c, http.StatusForbidden, errors.New(common.TranslateMessage(c, i18n.MsgAuthUserBanned)))
-			c.Abort()
-			return
-		}
-
-		c.Set("id", token.UserId)
-		c.Set("token_id", token.Id)
-		c.Set("token_key", token.Key)
 		c.Next()
 	}
 }
 
+func authenticateTokenReadOnly(c *gin.Context) bool {
+	key := c.Request.Header.Get("Authorization")
+	if strings.HasPrefix(key, "Bearer ") || strings.HasPrefix(key, "bearer ") {
+		key = strings.TrimSpace(key[7:])
+	}
+	key = strings.TrimPrefix(key, "sk-")
+	key = strings.Split(key, "-")[0]
+	return authenticateTokenReadOnlyKey(c, key)
+}
+
+func authenticateAcceptedTaskTokenReadOnly(c *gin.Context) bool {
+	key, _ := relayTokenKey(c)
+	return authenticateTokenReadOnlyKey(c, key)
+}
+
+func authenticateTokenReadOnlyKey(c *gin.Context, key string) bool {
+	if key == "" {
+		common.ApiErrorStatus(c, http.StatusUnauthorized, errors.New(common.TranslateMessage(c, i18n.MsgTokenNotProvided)))
+		c.Abort()
+		return false
+	}
+
+	token, err := model.GetTokenByKey(key, false)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			common.ApiErrorStatus(c, http.StatusUnauthorized, errors.New(common.TranslateMessage(c, i18n.MsgTokenInvalid)))
+		} else {
+			common.SysLog(common.LogText("TokenAuthReadOnly GetTokenByKey database error: %s", err.Error()))
+			common.ApiErrorStatus(c, http.StatusInternalServerError, errors.New(common.TranslateMessage(c, i18n.MsgDatabaseError)))
+		}
+		c.Abort()
+		return false
+	}
+
+	// TokenAuthReadOnly must keep allowing other token states to query read-only
+	// data, such as token usage logs; only explicitly disabled tokens are denied.
+	if token.Status == common.TokenStatusDisabled {
+		common.ApiErrorStatus(c, http.StatusUnauthorized, errors.New(common.TranslateMessage(c, i18n.MsgTokenStatusUnavailable)))
+		c.Abort()
+		return false
+	}
+
+	if allowIps := token.GetIpLimits(); len(allowIps) > 0 {
+		ip := net.ParseIP(c.ClientIP())
+		if ip == nil {
+			common.ApiErrorStatus(c, http.StatusForbidden, errors.New(common.TranslateMessage(c, i18n.MsgAuthClientIPUnresolved)))
+			c.Abort()
+			return false
+		}
+		if !common.IsIpInCIDRList(ip, allowIps) {
+			common.ApiErrorStatus(c, http.StatusForbidden, errors.New(common.TranslateMessage(c, i18n.MsgAuthTokenIPNotAllowed)))
+			c.Abort()
+			return false
+		}
+	}
+
+	userCache, err := model.GetUserCache(token.UserId)
+	if err != nil {
+		common.SysLog(common.LogText("TokenAuthReadOnly GetUserCache error for user %d: %v", token.UserId, err))
+		common.ApiErrorStatus(c, http.StatusInternalServerError, errors.New(common.TranslateMessage(c, i18n.MsgDatabaseError)))
+		c.Abort()
+		return false
+	}
+	if userCache.Status != common.UserStatusEnabled {
+		common.ApiErrorStatus(c, http.StatusForbidden, errors.New(common.TranslateMessage(c, i18n.MsgAuthUserBanned)))
+		c.Abort()
+		return false
+	}
+
+	c.Set("id", token.UserId)
+	c.Set("token_id", token.Id)
+	c.Set("token_key", token.Key)
+	return true
+}
+
+// AuthenticateAcceptedTaskTokenReadOnly uses relay credential aliases only
+// on task routes; management TokenAuthReadOnly stays Authorization-only.
+func AuthenticateAcceptedTaskTokenReadOnly(c *gin.Context) bool {
+	return authenticateAcceptedTaskTokenReadOnly(c)
+}
+
 func TokenAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
-		// 先检测是否为ws
-		applyWebSocketSubprotocolAuthorization(c.Request.Header)
-		// 检查path包含/v1/messages 或 /v1/models
-		if strings.Contains(c.Request.URL.Path, "/v1/messages") || strings.Contains(c.Request.URL.Path, "/v1/models") {
-			anthropicKey := c.Request.Header.Get("x-api-key")
-			if anthropicKey != "" {
-				c.Request.Header.Set("Authorization", "Bearer "+anthropicKey)
-			}
-		}
-		// gemini api 从query中获取key
-		if c.Request.URL.Path == "/v1/models" ||
-			strings.HasPrefix(c.Request.URL.Path, "/v1beta/models") ||
-			strings.HasPrefix(c.Request.URL.Path, "/v1beta/openai/models") ||
-			strings.HasPrefix(c.Request.URL.Path, "/v1/models/") {
-			skKey := c.Query("key")
-			if skKey != "" {
-				c.Request.Header.Set("Authorization", "Bearer "+skKey)
-			}
-			// 从x-goog-api-key header中获取key
-			xGoogKey := c.Request.Header.Get("x-goog-api-key")
-			if xGoogKey != "" {
-				c.Request.Header.Set("Authorization", "Bearer "+xGoogKey)
-			}
-		}
-		key := c.Request.Header.Get("Authorization")
-		parts := make([]string, 0)
-		if strings.HasPrefix(key, "Bearer ") || strings.HasPrefix(key, "bearer ") {
-			key = strings.TrimSpace(key[7:])
-		}
-		if key == "" || key == "midjourney-proxy" {
-			key = c.Request.Header.Get("mj-api-secret")
-			if strings.HasPrefix(key, "Bearer ") || strings.HasPrefix(key, "bearer ") {
-				key = strings.TrimSpace(key[7:])
-			}
-			key = strings.TrimPrefix(key, "sk-")
-			parts = strings.Split(key, "-")
-			key = parts[0]
-		} else {
-			key = strings.TrimPrefix(key, "sk-")
-			parts = strings.Split(key, "-")
-			key = parts[0]
-		}
+		key, parts := relayTokenKey(c)
 		token, err := model.ValidateUserToken(key)
 		if token != nil {
 			id := c.GetInt("id")
@@ -644,6 +624,41 @@ func TokenAuth() func(c *gin.Context) {
 		}
 		c.Next()
 	}
+}
+
+// relayTokenKey applies the same request credential precedence for strict
+// creates and read-only observation. Authentication policy remains separate.
+func relayTokenKey(c *gin.Context) (string, []string) {
+	applyWebSocketSubprotocolAuthorization(c.Request.Header)
+	if strings.Contains(c.Request.URL.Path, "/v1/messages") || strings.Contains(c.Request.URL.Path, "/v1/models") {
+		if key := c.Request.Header.Get("x-api-key"); key != "" {
+			c.Request.Header.Set("Authorization", "Bearer "+key)
+		}
+	}
+	if c.Request.URL.Path == "/v1/models" ||
+		strings.HasPrefix(c.Request.URL.Path, "/v1beta/models") ||
+		strings.HasPrefix(c.Request.URL.Path, "/v1beta/openai/models") ||
+		strings.HasPrefix(c.Request.URL.Path, "/v1/models/") {
+		if key := c.Query("key"); key != "" {
+			c.Request.Header.Set("Authorization", "Bearer "+key)
+		}
+		if key := c.Request.Header.Get("x-goog-api-key"); key != "" {
+			c.Request.Header.Set("Authorization", "Bearer "+key)
+		}
+	}
+	key := c.Request.Header.Get("Authorization")
+	if strings.HasPrefix(key, "Bearer ") || strings.HasPrefix(key, "bearer ") {
+		key = strings.TrimSpace(key[7:])
+	}
+	if key == "" || key == "midjourney-proxy" {
+		key = c.Request.Header.Get("mj-api-secret")
+		if strings.HasPrefix(key, "Bearer ") || strings.HasPrefix(key, "bearer ") {
+			key = strings.TrimSpace(key[7:])
+		}
+	}
+	key = strings.TrimPrefix(key, "sk-")
+	parts := strings.Split(key, "-")
+	return parts[0], parts
 }
 
 func applyWebSocketSubprotocolAuthorization(header http.Header) bool {

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type taskArtifactResponse struct {
@@ -93,6 +95,10 @@ func GetDashboardTaskArtifacts(c *gin.Context) {
 
 func writeTaskArtifacts(c *gin.Context, task *model.Task, dashboard bool) {
 	c.Header("Cache-Control", "private, no-store")
+	if !task.ResultRetrievable() {
+		writeTaskArtifactError(c, http.StatusNotFound, "artifact_not_found", "Task or artifact not found")
+		return
+	}
 	artifacts, err := projectTaskArtifacts(task)
 	if err != nil {
 		writeTaskArtifactProjectionError(c, err)
@@ -165,10 +171,16 @@ func legacySunoAudioClips(data json.RawMessage) []map[string]any {
 }
 
 func projectTaskArtifacts(task *model.Task) ([]relaychannel.TaskArtifact, error) {
-	if task == nil || task.Status != model.TaskStatusSuccess || !taskHasPluginExecution(task) || !task.ResultRetrievable() {
+	if task == nil || task.Status != model.TaskStatusSuccess || !task.ResultRetrievable() {
 		return []relaychannel.TaskArtifact{}, nil
 	}
-	adaptor := relay.GetTaskAdaptor(task.Platform)
+	if !taskHasPluginExecution(task) && !durableTaskIntakeExists(task) {
+		return []relaychannel.TaskArtifact{}, nil
+	}
+	adaptor, err := initTaskArtifactAdaptor(task)
+	if err != nil {
+		return nil, err
+	}
 	if adaptor == nil {
 		return nil, errTaskArtifactPluginUnavailable
 	}
@@ -213,7 +225,15 @@ func validateProjectedTaskArtifacts(artifacts []relaychannel.TaskArtifact) ([]re
 }
 
 func initTaskArtifactAdaptor(task *model.Task) (relaychannel.TaskAdaptor, error) {
-	if task == nil || !taskHasPluginExecution(task) {
+	if task == nil {
+		return nil, errTaskArtifactPluginUnavailable
+	}
+	if _, err := model.GetTaskIntake(context.Background(), task.ID); err == nil {
+		return frozenTaskAdaptor(task)
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	if !taskHasPluginExecution(task) {
 		return nil, errTaskArtifactPluginUnavailable
 	}
 	channelModel, err := model.CacheGetChannel(task.ChannelId)
@@ -242,6 +262,14 @@ func initTaskArtifactAdaptor(task *model.Task) (relaychannel.TaskAdaptor, error)
 		},
 	})
 	return adaptor, nil
+}
+
+func durableTaskIntakeExists(task *model.Task) bool {
+	if task == nil {
+		return false
+	}
+	_, err := model.GetTaskIntake(context.Background(), task.ID)
+	return err == nil
 }
 
 func taskHasPluginExecution(task *model.Task) bool {
@@ -334,7 +362,7 @@ func TaskArtifactContent(c *gin.Context) {
 		writeTaskArtifactError(c, http.StatusConflict, "artifact_not_ready", "Task artifacts are not ready")
 		return
 	}
-	if !taskHasPluginExecution(task) {
+	if !taskHasPluginExecution(task) && !durableTaskIntakeExists(task) {
 		if artifactKey != "video" || !legacyVideoAvailable(task) {
 			writeTaskArtifactError(c, http.StatusNotFound, "artifact_not_found", "Task or artifact not found")
 			return

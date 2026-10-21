@@ -186,7 +186,7 @@ func TokenOrTaskArtifactAccessAuth(taskParam, artifactParam string) gin.HandlerF
 			invalid = invalid || queryInvalid
 		}
 		if !present {
-			TokenAuth()(c)
+			TokenAuthForAcceptedTask(taskParam)(c)
 			return
 		}
 

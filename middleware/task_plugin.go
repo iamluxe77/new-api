@@ -241,6 +241,9 @@ func PrepareTaskPluginRoute() gin.HandlerFunc {
 				requestContext.RequestBody = replacementBody
 				c.Set(pluginruntime.ContextKeyRouteRequest, requestContext)
 			}
+			if webhook, present := resolved["webhook"]; present && pinned.Plugin.Meta.DurableSubmit() {
+				c.Set(pluginruntime.ContextKeyWebhookIntent, webhook)
+			}
 			c.Set("task_request", requestContext.RequestBody)
 			if requestBodyText != nil {
 				c.Set(pluginruntime.ContextKeyRequestBodyText, requestBodyText)
@@ -787,6 +790,37 @@ func buildTaskPluginRouteRequest(c *gin.Context) (pluginruntime.RouteRequestCont
 	mediaType, mediaParams, err := mime.ParseMediaType(contentType)
 	if err != nil {
 		return requestContext, err
+	}
+	var durablePlugin *pluginruntime.LoadedPlugin
+	if value, ok := c.Get(pluginruntime.ContextKeyPinnedRoute); ok {
+		if pinned, valid := value.(pluginruntime.PinnedRoute); valid {
+			durablePlugin = pinned.Plugin
+		}
+	}
+	if value, ok := c.Get(pluginruntime.ContextKeyPinnedEndpoint); ok {
+		if pinned, valid := value.(pluginruntime.PinnedEndpoint); valid {
+			durablePlugin = pinned.Plugin
+		}
+	}
+	if durablePlugin != nil && durablePlugin.Meta.DurableSubmit() {
+		storage, storageErr := common.GetBodyStorage(c)
+		if storageErr != nil {
+			return requestContext, storageErr
+		}
+		raw, bytesErr := storage.Bytes()
+		if bytesErr != nil {
+			return requestContext, bytesErr
+		}
+		body, files, frozenFiles, parseErr := pluginruntime.ParseFrozenTaskBody(raw, contentType)
+		if parseErr != nil {
+			return requestContext, parseErr
+		}
+		requestContext.Body, requestContext.Files = body, files
+		if mediaType == "application/json" || strings.HasSuffix(mediaType, "+json") {
+			requestContext.BodyText = raw
+		}
+		c.Set(pluginruntime.ContextKeyFrozenTaskFiles, frozenFiles)
+		return requestContext, nil
 	}
 	switch {
 	case mediaType == "application/json" || strings.HasSuffix(mediaType, "+json"):

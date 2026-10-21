@@ -2,6 +2,8 @@ package jsplugin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -140,6 +142,12 @@ func (m Meta) AcceptsAutoDuration() bool {
 	return slices.Contains(m.RequiredCapabilities, CapabilityDurationAuto)
 }
 
+// DurableSubmit requires the host to persist and reserve a task before any
+// supplier operation. It is opt-in and never changes legacy plugins.
+func (m Meta) DurableSubmit() bool {
+	return slices.Contains(m.RequiredCapabilities, CapabilityDurableSubmit)
+}
+
 // JSONTextMember names the member of a hook result (a decoded requestBody, a
 // request descriptor's body) that the host also takes as JSON text, for a
 // plugin that preserves JSON order; it is empty for other plugins.
@@ -222,8 +230,9 @@ type UsageFieldSchema struct {
 }
 
 type LoadedPlugin struct {
-	Meta   Meta
-	Engine *Engine
+	Meta       Meta
+	Engine     *Engine
+	SourceHash string
 }
 
 // UsesSubmitEventDelta reports whether SSE submissions go through
@@ -357,6 +366,18 @@ func CompilePlugin(source string, options Options) (*LoadedPlugin, error) {
 	engine.key = meta.Key
 	engine.version = meta.Version
 	requiredHooks := []string{"buildSubmitRequest", "parseSubmitResponse", "parseTaskResult"}
+	if meta.DurableSubmit() {
+		if meta.FetchMode != "per_task" || slices.Contains(meta.SubmitResponseTypes, "sse") {
+			return nil, fmt.Errorf("plugin %s durable-submit@1 requires per_task JSON responses", meta.Key)
+		}
+		requiredHooks = append(requiredHooks, "buildReceiptRequest", "parseReceiptResponse", "buildDurableAttemptQueryRequest", "parseDurableCandidate")
+		if engine.HasExport("buildPrepareRequest") != engine.HasExport("parsePrepareResponse") {
+			return nil, fmt.Errorf("plugin %s must export both durable preparation hooks", meta.Key)
+		}
+		if engine.HasExport("buildPrepareRequest") {
+			requiredHooks = append(requiredHooks, "buildPrepareRequest", "parsePrepareResponse")
+		}
+	}
 	if slices.Contains(meta.SubmitResponseTypes, "sse") {
 		if UsesSubmitEventDelta(meta, engine) {
 			requiredHooks = append(requiredHooks, "parseSubmitEventDelta")
@@ -532,7 +553,8 @@ func CompilePlugin(source string, options Options) (*LoadedPlugin, error) {
 			return nil, fmt.Errorf("plugin %s export %q is no longer supported", meta.Key, removed)
 		}
 	}
-	return &LoadedPlugin{Meta: meta, Engine: engine}, nil
+	digest := sha256.Sum256([]byte(source))
+	return &LoadedPlugin{Meta: meta, Engine: engine, SourceHash: hex.EncodeToString(digest[:])}, nil
 }
 
 func (r *Registry) Get(platform string) (*LoadedPlugin, bool) {

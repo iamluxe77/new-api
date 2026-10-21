@@ -24,6 +24,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/net/http/httpguts"
+	"gorm.io/gorm"
 )
 
 var errTaskMediaRequestRejected = errors.New("task media request rejected")
@@ -82,10 +83,24 @@ func VideoProxy(c *gin.Context) {
 			fmt.Sprintf("Task is not completed yet, current status: %s", task.Status))
 		return
 	}
+	if !task.ResultRetrievable() {
+		videoProxyError(c, http.StatusNotFound, "invalid_request_error", "Task not found")
+		return
+	}
+	_, intakeErr := model.GetTaskIntake(c.Request.Context(), task.ID)
+	durable := intakeErr == nil
+	if intakeErr != nil && !errors.Is(intakeErr, gorm.ErrRecordNotFound) {
+		videoProxyError(c, http.StatusServiceUnavailable, "server_error", "Task content is unavailable")
+		return
+	}
 
 	var descriptor *relaychannel.TaskContentRequest
-	if taskHasPluginExecution(task) {
+	if taskHasPluginExecution(task) || durable {
 		artifacts, projectionErr := projectTaskArtifacts(task)
+		if projectionErr != nil && durable {
+			videoProxyError(c, http.StatusServiceUnavailable, "server_error", "Task content is unavailable")
+			return
+		}
 		if projectionErr == nil {
 			for _, artifact := range artifacts {
 				if artifact.Type != "video" {
@@ -101,6 +116,10 @@ func VideoProxy(c *gin.Context) {
 					}
 				}
 				if adaptorErr != nil {
+					if durable {
+						videoProxyError(c, http.StatusServiceUnavailable, "server_error", "Task content is unavailable")
+						return
+					}
 					logger.LogWarn(c.Request.Context(), common.LogText("Failed to resolve plugin video content for task %s: %v", taskID, adaptorErr))
 					descriptor = nil
 				}
@@ -109,6 +128,10 @@ func VideoProxy(c *gin.Context) {
 		} else {
 			logger.LogWarn(c.Request.Context(), common.LogText("Failed to project plugin video for task %s", taskID))
 		}
+	}
+	if durable && descriptor == nil {
+		videoProxyError(c, http.StatusServiceUnavailable, "server_error", "Task content is unavailable")
+		return
 	}
 	if descriptor == nil {
 		resultURL := task.GetResultURL()

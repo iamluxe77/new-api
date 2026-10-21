@@ -121,9 +121,10 @@ func sweepTimedOutTasks(ctx context.Context) {
 // TaskPollSummary is the result recorded on an async_task_poll system task row,
 // summarizing one polling pass.
 type TaskPollSummary struct {
-	UnfinishedTasks  int `json:"unfinished_tasks"`
-	PlatformsScanned int `json:"platforms_scanned"`
-	NullTasksFailed  int `json:"null_tasks_failed"`
+	UnfinishedTasks   int  `json:"unfinished_tasks"`
+	PlatformsScanned  int  `json:"platforms_scanned"`
+	NullTasksFailed   int  `json:"null_tasks_failed"`
+	RecoverySucceeded bool `json:"recovery_succeeded"`
 }
 
 // RunTaskPollingOnce performs one async-task (Suno/video) polling pass
@@ -133,11 +134,15 @@ type TaskPollSummary struct {
 // adaptor factory has not been wired yet, to avoid a nil call during startup.
 func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) TaskPollSummary {
 	summary := TaskPollSummary{}
-	if GetTaskAdaptorFunc == nil {
-		return summary
-	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	summary.RecoverySucceeded = RunTaskRecoveryPass(ctx)
+	if !RunDurableTaskPass(ctx) {
+		summary.RecoverySucceeded = false
+	}
+	if GetTaskAdaptorFunc == nil || !constant.UpdateTask {
+		return summary
 	}
 
 	common.SysLog(common.LogText("task progress polling started"))

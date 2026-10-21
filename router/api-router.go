@@ -332,6 +332,9 @@ func SetApiRouter(router *gin.Engine) {
 
 		systemTaskRoute := apiRouter.Group("/system-task")
 		systemTaskRoute.Use(middleware.RootAuth())
+		systemTaskRoute.GET("/task-recovery", controller.GetTaskRecoveryStatus)
+		systemTaskRoute.GET("/task-recovery/blocked", controller.GetBlockedTaskRecovery)
+		systemTaskRoute.POST("/task-recovery/blocked/resume", controller.ResumeBlockedTaskRecovery)
 		{
 			systemTaskRoute.POST("/log-cleanup", controller.CreateLogCleanupSystemTask)
 			systemTaskRoute.GET("/list", controller.ListSystemTasks)

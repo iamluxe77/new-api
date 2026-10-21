@@ -27,6 +27,8 @@ import (
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/pkg/wsmanager"
 	"github.com/QuantumNous/new-api/relay"
+	jspluginadaptor "github.com/QuantumNous/new-api/relay/channel/task/jsplugin"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
@@ -148,6 +150,23 @@ func main() {
 			return nil
 		}
 		return a
+	}
+	service.GetDurableTaskAdaptorFunc = func(ctx context.Context, taskID int64) (service.DurableTaskAdaptor, error) {
+		intake, plugin, err := service.LoadFrozenTaskPlugin(ctx, taskID)
+		if err != nil {
+			return nil, err
+		}
+		var credentials service.DurableTaskCredentialSnapshot
+		if err := common.Unmarshal(intake.CredentialSnapshot, &credentials); err != nil {
+			return nil, fmt.Errorf("%w: credential snapshot: %v", service.ErrDurableFrozenContextInvalid, err)
+		}
+		channel := credentials.Channel
+		if channel.ChannelId != intake.ChannelID || channel.ChannelBaseUrl != intake.SupplierBaseURL || channel.ApiKey == "" {
+			return nil, fmt.Errorf("%w: channel credentials are invalid", service.ErrDurableFrozenContextInvalid)
+		}
+		adaptor := jspluginadaptor.New(plugin)
+		adaptor.Init(&relaycommon.RelayInfo{ChannelMeta: &channel})
+		return adaptor, nil
 	}
 
 	// Register the periodic channel test, upstream model update, and async task

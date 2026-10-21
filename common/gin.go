@@ -23,6 +23,7 @@ import (
 
 const KeyRequestBody = "key_request_body"
 const KeyBodyStorage = "key_body_storage"
+const KeyMemoryOnlyBody = "key_memory_only_body"
 const keyBodyReadError = "key_body_read_error"
 
 var ErrRequestBodyTooLarge = errors.New("request body too large")
@@ -53,6 +54,11 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 	cached, exists := c.Get(KeyRequestBody)
 	if exists && cached != nil {
 		if b, ok := cached.([]byte); ok {
+			if memoryOnly, _ := c.Get(KeyMemoryOnlyBody); memoryOnly == true {
+				bs := newMemoryStorage(b)
+				c.Set(KeyBodyStorage, bs)
+				return bs, nil
+			}
 			bs, err := CreateBodyStorage(b)
 			if err != nil {
 				return nil, err
@@ -77,7 +83,20 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 	contentLength := c.Request.ContentLength
 
 	// 使用新的存储系统
-	storage, err := CreateBodyStorageFromReader(c.Request.Body, contentLength, maxBytes)
+	var storage BodyStorage
+	var err error
+	if memoryOnly, _ := c.Get(KeyMemoryOnlyBody); memoryOnly == true {
+		data, readErr := io.ReadAll(io.LimitReader(c.Request.Body, maxBytes+1))
+		if readErr != nil {
+			err = readErr
+		} else if int64(len(data)) > maxBytes {
+			err = ErrRequestBodyTooLarge
+		} else {
+			storage = newMemoryStorage(data)
+		}
+	} else {
+		storage, err = CreateBodyStorageFromReader(c.Request.Body, contentLength, maxBytes)
+	}
 	_ = c.Request.Body.Close()
 
 	if err != nil {

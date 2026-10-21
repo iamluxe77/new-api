@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -139,7 +140,18 @@ type asyncTaskPollHandler struct{}
 func (asyncTaskPollHandler) Type() string { return model.SystemTaskTypeAsyncTaskPoll }
 
 func (asyncTaskPollHandler) Enabled() bool {
-	return constant.UpdateTask && model.HasUnfinishedSyncTasks()
+	backlog, err := model.HasTaskRecoveryBacklog(context.Background())
+	if err != nil {
+		return true
+	}
+	if backlog {
+		return true
+	}
+	due, err := model.HasDueTaskDispatch(context.Background())
+	if err != nil {
+		return true
+	}
+	return due || (constant.UpdateTask && model.HasUnfinishedSyncTasks())
 }
 
 func (asyncTaskPollHandler) Interval() time.Duration { return 15 * time.Second }
@@ -148,6 +160,10 @@ func (asyncTaskPollHandler) NewPayload() any { return nil }
 
 func (asyncTaskPollHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
 	summary := service.RunTaskPollingOnce(ctx, service.NewSystemTaskProgressReporter(task, runnerID))
+	if !summary.RecoverySucceeded {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, summary, errors.New("native task recovery did not complete"))
+		return
+	}
 	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 

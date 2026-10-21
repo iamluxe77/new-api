@@ -6,6 +6,14 @@ import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
 export function createRoutingPolicySchema(t: TFunction) {
   return z.object({
     RetryTimes: z.number().int().min(0).max(99),
+    DurableTaskAttemptBudget: z.number().int().min(1).max(8),
+    DurableTaskSuccessorDelaySeconds: z.number().int().min(1).max(60),
+    DurableTaskReconcileDelaySeconds: z.number().int().min(1).max(3600),
+    DurableTaskReplayInitialDelaySeconds: z.number().int().min(30).max(3600),
+    DurableTaskReplayMaxDelaySeconds: z.number().int().min(30).max(86400),
+    DurableTaskReplayJitterSeconds: z.number().int().min(0).max(60),
+    DurableTaskUncertainRetryEnabled: z.boolean(),
+    DurableTaskUncertainRetryDelaySeconds: z.number().int().min(60).max(3600),
     AutomaticRetryStatusCodes: z
       .string()
       .refine(
@@ -36,7 +44,10 @@ export function createRoutingPolicySchema(t: TFunction) {
         }
       }),
     }),
-  })
+  }).refine(
+    (value) => value.DurableTaskReplayMaxDelaySeconds >= value.DurableTaskReplayInitialDelaySeconds,
+    { path: ['DurableTaskReplayMaxDelaySeconds'], message: t('Maximum replay delay must be at least the initial delay') }
+  )
 }
 
 export type RoutingPolicyFormValues = z.infer<
@@ -48,6 +59,14 @@ export function routingPolicyFormValues(
 ): RoutingPolicyFormValues {
   return {
     RetryTimes: Number(options.RetryTimes),
+    DurableTaskAttemptBudget: Number(options.DurableTaskAttemptBudget),
+    DurableTaskSuccessorDelaySeconds: Number(options.DurableTaskSuccessorDelaySeconds),
+    DurableTaskReconcileDelaySeconds: Number(options.DurableTaskReconcileDelaySeconds),
+    DurableTaskReplayInitialDelaySeconds: Number(options.DurableTaskReplayInitialDelaySeconds),
+    DurableTaskReplayMaxDelaySeconds: Number(options.DurableTaskReplayMaxDelaySeconds),
+    DurableTaskReplayJitterSeconds: Number(options.DurableTaskReplayJitterSeconds),
+    DurableTaskUncertainRetryEnabled: options.DurableTaskUncertainRetryEnabled === 'true',
+    DurableTaskUncertainRetryDelaySeconds: Number(options.DurableTaskUncertainRetryDelaySeconds),
     AutomaticRetryStatusCodes: options.AutomaticRetryStatusCodes,
     channel_affinity_setting: {
       enabled: options['channel_affinity_setting.enabled'] === 'true',
@@ -71,6 +90,14 @@ export function routingPolicyOptions(
 ): Record<string, string> {
   return {
     RetryTimes: String(values.RetryTimes),
+    DurableTaskAttemptBudget: String(values.DurableTaskAttemptBudget),
+    DurableTaskSuccessorDelaySeconds: String(values.DurableTaskSuccessorDelaySeconds),
+    DurableTaskReconcileDelaySeconds: String(values.DurableTaskReconcileDelaySeconds),
+    DurableTaskReplayInitialDelaySeconds: String(values.DurableTaskReplayInitialDelaySeconds),
+    DurableTaskReplayMaxDelaySeconds: String(values.DurableTaskReplayMaxDelaySeconds),
+    DurableTaskReplayJitterSeconds: String(values.DurableTaskReplayJitterSeconds),
+    DurableTaskUncertainRetryEnabled: String(values.DurableTaskUncertainRetryEnabled),
+    DurableTaskUncertainRetryDelaySeconds: String(values.DurableTaskUncertainRetryDelaySeconds),
     AutomaticRetryStatusCodes: values.AutomaticRetryStatusCodes,
     ...Object.fromEntries(
       Object.entries(values.channel_affinity_setting).map(([key, value]) => [

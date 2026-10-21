@@ -223,6 +223,7 @@ const (
 	// order, the decoded requestBody as JSON text (json.RawMessage) beside
 	// the Go value in task_request.
 	ContextKeyRequestBodyText = "task_plugin_request_body_text"
+	ContextKeyWebhookIntent   = "task_plugin_webhook_intent"
 )
 
 type PinnedPlugin struct {

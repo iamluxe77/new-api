@@ -1244,6 +1244,7 @@ func ExpireDueSubscriptions(limit int) (int, error) {
 type SubscriptionPreConsumeRecord struct {
 	Id                 int    `json:"id"`
 	RequestId          string `json:"request_id" gorm:"type:varchar(64);uniqueIndex"`
+	TaskID             int64  `json:"-" gorm:"type:bigint;index"`
 	UserId             int    `json:"user_id" gorm:"index"`
 	UserSubscriptionId int    `json:"user_subscription_id" gorm:"index"`
 	PreConsumed        int64  `json:"pre_consumed" gorm:"type:bigint;not null;default:0"`
@@ -1479,7 +1480,11 @@ func CleanupSubscriptionPreConsumeRecords(olderThanSeconds int64) (int64, error)
 		olderThanSeconds = 7 * 24 * 3600
 	}
 	cutoff := GetDBTimestamp() - olderThanSeconds
-	res := DB.Where("updated_at < ?", cutoff).Delete(&SubscriptionPreConsumeRecord{})
+	activeTasks := DB.Model(&TaskFinance{}).Select("task_id").Where("state <> ?", "settled")
+	unprojectedTasks := DB.Model(&TaskFinanceEvent{}).Select("task_id").Where("projected_at = ?", 0)
+	res := DB.Where("updated_at < ? AND (task_id IS NULL OR task_id = 0 OR (task_id NOT IN (?) AND task_id NOT IN (?)))",
+		cutoff, activeTasks, unprojectedTasks).
+		Delete(&SubscriptionPreConsumeRecord{})
 	return res.RowsAffected, res.Error
 }
 

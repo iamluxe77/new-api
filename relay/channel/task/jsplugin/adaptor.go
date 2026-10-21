@@ -37,17 +37,22 @@ import (
 )
 
 type requestDescriptor struct {
-	ResponseType   string            `json:"responseType"`
-	URL            string            `json:"url"`
-	Method         string            `json:"method"`
-	Headers        map[string]string `json:"headers"`
-	Body           any               `json:"body"`
-	Credentialless bool              `json:"credentialless"`
-	Action         string            `json:"action"`
-	Model          string            `json:"model"`
-	RewriteModel   string            `json:"rewriteModel"`
-	BodyType       string            `json:"bodyType"`
-	Parts          []requestPart     `json:"parts"`
+	ResponseType      string                        `json:"responseType"`
+	URL               string                        `json:"url"`
+	Method            string                        `json:"method"`
+	Headers           map[string]string             `json:"headers"`
+	Body              any                           `json:"body"`
+	Credentialless    bool                          `json:"credentialless"`
+	Action            string                        `json:"action"`
+	Model             string                        `json:"model"`
+	RewriteModel      string                        `json:"rewriteModel"`
+	BodyType          string                        `json:"bodyType"`
+	SupplierKeyHeader string                        `json:"supplierKeyHeader"`
+	AtomicReplay      *model.TaskAtomicReplayPolicy `json:"atomicReplay"`
+	Operation         string                        `json:"operation"`
+	Rejection         *durablePrepareRejection      `json:"rejection"`
+	WireHost          string                        `json:"-"`
+	Parts             []requestPart                 `json:"parts"`
 	// BodyText is the body as JSON.stringify wrote it, for a plugin that
 	// preserves JSON order: the upstream gets the members in that order.
 	BodyText json.RawMessage `json:"-"`
@@ -57,17 +62,21 @@ type requestDescriptor struct {
 // JSON order returns it: decoded from the JSON.stringify text of the result,
 // with the body kept as that text.
 type orderedRequestDescriptor struct {
-	ResponseType   string            `json:"responseType"`
-	URL            string            `json:"url"`
-	Method         string            `json:"method"`
-	Headers        map[string]string `json:"headers"`
-	Body           json.RawMessage   `json:"body"`
-	Credentialless bool              `json:"credentialless"`
-	Action         string            `json:"action"`
-	Model          string            `json:"model"`
-	RewriteModel   string            `json:"rewriteModel"`
-	BodyType       string            `json:"bodyType"`
-	Parts          []requestPart     `json:"parts"`
+	ResponseType      string                        `json:"responseType"`
+	URL               string                        `json:"url"`
+	Method            string                        `json:"method"`
+	Headers           map[string]string             `json:"headers"`
+	Body              json.RawMessage               `json:"body"`
+	Credentialless    bool                          `json:"credentialless"`
+	Action            string                        `json:"action"`
+	Model             string                        `json:"model"`
+	RewriteModel      string                        `json:"rewriteModel"`
+	BodyType          string                        `json:"bodyType"`
+	SupplierKeyHeader string                        `json:"supplierKeyHeader"`
+	AtomicReplay      *model.TaskAtomicReplayPolicy `json:"atomicReplay"`
+	Operation         string                        `json:"operation"`
+	Rejection         *durablePrepareRejection      `json:"rejection"`
+	Parts             []requestPart                 `json:"parts"`
 }
 
 type requestPart struct {
@@ -85,6 +94,7 @@ type submitResponse struct {
 }
 type taskResult struct {
 	Code             int     `json:"code"`
+	PublicErrorCode  string  `json:"publicErrorCode"`
 	TaskID           string  `json:"taskId"`
 	Status           string  `json:"status"`
 	Progress         string  `json:"progress"`
@@ -116,6 +126,8 @@ type TaskAdaptor struct {
 	// requestBodyText is the decoded requestBody as JSON text, which hooks
 	// of a plugin that preserves JSON order receive instead.
 	requestBodyText json.RawMessage
+	durableWorker   bool
+	prepareState    any
 }
 
 func New(plugin *pluginruntime.LoadedPlugin) *TaskAdaptor { return &TaskAdaptor{plugin: plugin} }
@@ -141,6 +153,9 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 					if body, present := resolved["requestBody"]; present {
 						c.Set("task_request", body)
 					}
+					if webhook, present := resolved["webhook"]; present && a.plugin.Meta.DurableSubmit() {
+						c.Set(pluginruntime.ContextKeyWebhookIntent, webhook)
+					}
 					if requestBodyText != nil {
 						c.Set(pluginruntime.ContextKeyRequestBodyText, requestBodyText)
 					}
@@ -163,6 +178,16 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 		if err := a.validateResolvedUsageRequest(request); err != nil {
 			return service.TaskErrorWrapperLocal(err, "plugin_usage_invalid", http.StatusBadRequest)
 		}
+	}
+	// Durable admission cannot run a submit hook before the task and funding
+	// are committed. Its usage hooks receive a local, credential-free context.
+	if a.plugin.Meta.DurableSubmit() {
+		if hasRequest && hasUsageProfiles {
+			if err := a.validateResolvedUsageRequest(request, info.UpstreamModelName, info.OriginModelName); err != nil {
+				return service.TaskErrorWrapperLocal(err, "plugin_usage_invalid", http.StatusBadRequest)
+			}
+		}
+		return nil
 	}
 	if _, err := a.buildSubmit(c, info); err != nil {
 		// utils.fetch failures in the build hook name the host fetched: the
@@ -387,7 +412,13 @@ func maxInlineFileBytes() int64 {
 func inlineJSONFilePlaceholders(c *gin.Context, body any) (any, error) {
 	cloned := jsonValue(body)
 	var form *multipart.Form
-	if c != nil && c.Request != nil && strings.Contains(c.GetHeader("Content-Type"), "multipart/form-data") {
+	var frozen map[string][]pluginruntime.FrozenTaskFile
+	if c != nil {
+		if value, present := c.Get(pluginruntime.ContextKeyFrozenTaskFiles); present {
+			frozen, _ = value.(map[string][]pluginruntime.FrozenTaskFile)
+		}
+	}
+	if frozen == nil && c != nil && c.Request != nil && strings.Contains(c.GetHeader("Content-Type"), "multipart/form-data") {
 		parsed, parseErr := common.ParseMultipartFormReusable(c)
 		if parseErr != nil {
 			return nil, parseErr
@@ -397,17 +428,17 @@ func inlineJSONFilePlaceholders(c *gin.Context, body any) (any, error) {
 	}
 	limit := maxInlineFileBytes()
 	var total int64
-	return replaceJSONFilePlaceholders(cloned, form, limit, &total)
+	return replaceJSONFilePlaceholders(cloned, form, frozen, limit, &total)
 }
 
-func replaceJSONFilePlaceholders(value any, form *multipart.Form, limit int64, total *int64) (any, error) {
+func replaceJSONFilePlaceholders(value any, form *multipart.Form, frozen map[string][]pluginruntime.FrozenTaskFile, limit int64, total *int64) (any, error) {
 	switch typed := value.(type) {
 	case map[string]any:
 		if _, isPlaceholder := typed["__fileRef"]; isPlaceholder {
-			return encodeFilePlaceholder(typed, form, limit, total)
+			return encodeFilePlaceholder(typed, form, frozen, limit, total)
 		}
 		for key, item := range typed {
-			replaced, err := replaceJSONFilePlaceholders(item, form, limit, total)
+			replaced, err := replaceJSONFilePlaceholders(item, form, frozen, limit, total)
 			if err != nil {
 				return nil, err
 			}
@@ -416,7 +447,7 @@ func replaceJSONFilePlaceholders(value any, form *multipart.Form, limit int64, t
 		return typed, nil
 	case []any:
 		for index, item := range typed {
-			replaced, err := replaceJSONFilePlaceholders(item, form, limit, total)
+			replaced, err := replaceJSONFilePlaceholders(item, form, frozen, limit, total)
 			if err != nil {
 				return nil, err
 			}
@@ -428,7 +459,7 @@ func replaceJSONFilePlaceholders(value any, form *multipart.Form, limit int64, t
 	}
 }
 
-func encodeFilePlaceholder(placeholder map[string]any, form *multipart.Form, limit int64, total *int64) (string, error) {
+func encodeFilePlaceholder(placeholder map[string]any, form *multipart.Form, frozen map[string][]pluginruntime.FrozenTaskFile, limit int64, total *int64) (string, error) {
 	for key := range placeholder {
 		switch key {
 		case "__fileRef", "encoding", "mimeType", "maxBytes":
@@ -444,15 +475,13 @@ func encodeFilePlaceholder(placeholder map[string]any, form *multipart.Form, lim
 	if encoding != "base64" && encoding != "dataUrl" {
 		return "", fmt.Errorf("file placeholder encoding must be \"base64\" or \"dataUrl\"")
 	}
-	if form == nil {
+	if form == nil && frozen == nil {
 		return "", fmt.Errorf("unknown file reference %q", ref)
 	}
 	field, index, validRef := pluginruntime.ParseFileReference(ref)
-	files := form.File[field]
-	if !validRef || index >= len(files) {
+	if !validRef || (frozen != nil && index >= len(frozen[field])) || (frozen == nil && index >= len(form.File[field])) {
 		return "", fmt.Errorf("unknown file reference %q", ref)
 	}
-	header := files[index]
 	maxBytes := limit
 	if raw, exists := placeholder["maxBytes"]; exists {
 		n, ok := usageNumber(raw, false)
@@ -463,17 +492,27 @@ func encodeFilePlaceholder(placeholder map[string]any, form *multipart.Form, lim
 			maxBytes = int64(n)
 		}
 	}
-	if header.Size > maxBytes {
-		return "", fmt.Errorf("file %q exceeds the %d byte limit", ref, maxBytes)
-	}
-	file, openErr := header.Open()
-	if openErr != nil {
-		return "", openErr
-	}
-	data, readErr := io.ReadAll(io.LimitReader(file, maxBytes+1))
-	file.Close()
-	if readErr != nil {
-		return "", readErr
+	var data []byte
+	contentType := ""
+	if frozen != nil {
+		file := frozen[field][index]
+		data, contentType = file.Bytes, file.MIMEType
+	} else {
+		header := form.File[field][index]
+		if header.Size > maxBytes {
+			return "", fmt.Errorf("file %q exceeds the %d byte limit", ref, maxBytes)
+		}
+		file, openErr := header.Open()
+		if openErr != nil {
+			return "", openErr
+		}
+		var readErr error
+		data, readErr = io.ReadAll(io.LimitReader(file, maxBytes+1))
+		file.Close()
+		if readErr != nil {
+			return "", readErr
+		}
+		contentType = header.Header.Get("Content-Type")
 	}
 	if int64(len(data)) > maxBytes {
 		return "", fmt.Errorf("file %q exceeds the %d byte limit", ref, maxBytes)
@@ -489,7 +528,7 @@ func encodeFilePlaceholder(placeholder map[string]any, form *multipart.Form, lim
 	mimeType := "application/octet-stream"
 	if override, ok := placeholder["mimeType"].(string); ok && strings.TrimSpace(override) != "" {
 		mimeType = override
-	} else if contentType := header.Header.Get("Content-Type"); contentType != "" {
+	} else if contentType != "" {
 		mimeType = contentType
 	}
 	return "data:" + mimeType + ";base64," + encoded, nil
@@ -1422,6 +1461,8 @@ func (a *TaskAdaptor) requestDescriptor(ctx context.Context, hook string, args .
 		ResponseType: ordered.ResponseType, URL: ordered.URL, Method: ordered.Method, Headers: ordered.Headers,
 		Credentialless: ordered.Credentialless, Action: ordered.Action, Model: ordered.Model,
 		RewriteModel: ordered.RewriteModel, BodyType: ordered.BodyType, Parts: ordered.Parts,
+		SupplierKeyHeader: ordered.SupplierKeyHeader, AtomicReplay: ordered.AtomicReplay,
+		Operation: ordered.Operation, Rejection: ordered.Rejection,
 	}
 	switch {
 	case len(ordered.Body) == 0 || string(ordered.Body) == "null":
@@ -1573,7 +1614,9 @@ func (a *TaskAdaptor) submitContext(c *gin.Context, info *relaycommon.RelayInfo)
 			}
 			requestHeaders["Content-Type"] = c.GetHeader("Content-Type")
 			requestHeaders["Accept"] = c.GetHeader("Accept")
-			if strings.Contains(c.GetHeader("Content-Type"), "multipart/form-data") {
+			if _, frozen := c.Get(pluginruntime.ContextKeyFrozenTaskFiles); frozen {
+				files = append(files, routeRequest.Files...)
+			} else if strings.Contains(c.GetHeader("Content-Type"), "multipart/form-data") {
 				if form, err := common.ParseMultipartFormReusable(c); err == nil {
 					defer form.RemoveAll()
 					for field, headers := range form.File {
@@ -1638,8 +1681,14 @@ func (a *TaskAdaptor) submitContext(c *gin.Context, info *relaycommon.RelayInfo)
 	ctx["upstreamModel"] = info.UpstreamModelName
 	ctx["baseUrl"] = info.ChannelBaseUrl
 	ctx["userSetting"] = info.UserSetting
-	if err := a.applyUpstreamCredentials(ctx, info.ChannelType, info.ApiKey, info.ChannelSetting.Proxy); err != nil {
+	if a.plugin.Meta.DurableSubmit() && !a.durableWorker {
+		ctx["apiKey"] = ""
+		ctx["authHeader"] = ""
+	} else if err := a.applyUpstreamCredentials(ctx, info.ChannelType, info.ApiKey, info.ChannelSetting.Proxy); err != nil {
 		ctx["authError"] = err.Error()
+	}
+	if a.durableWorker {
+		ctx["prepareState"] = a.prepareState
 	}
 	return ctx
 }

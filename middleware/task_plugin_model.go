@@ -10,6 +10,14 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+const frozenTaskModelRewriteKey = "frozen_task_model_rewrite"
+
+func FrozenTaskModelRewrite(c *gin.Context) string {
+	value, _ := c.Get(frozenTaskModelRewriteKey)
+	rewrite, _ := value.(string)
+	return rewrite
+}
+
 // rewriteTaskPluginJSONModel patches the top-level JSON "model" field and
 // replaces BodyStorage. Non-JSON bodies are left untouched.
 func rewriteTaskPluginJSONModel(c *gin.Context, spelling string) error {
@@ -32,14 +40,20 @@ func rewriteTaskPluginJSONModel(c *gin.Context, spelling string) error {
 	if err != nil {
 		return err
 	}
-	newStorage, err := common.CreateBodyStorage(patched)
-	if err != nil {
-		return err
+	var newStorage common.BodyStorage
+	if memoryOnly, _ := c.Get(common.KeyMemoryOnlyBody); memoryOnly == true {
+		newStorage = common.NewMemoryBodyStorage(patched)
+	} else {
+		newStorage, err = common.CreateBodyStorage(patched)
+		if err != nil {
+			return err
+		}
 	}
 	_ = storage.Close()
 	c.Set(common.KeyBodyStorage, newStorage)
 	c.Set(common.KeyRequestBody, nil)
 	c.Request.Body = io.NopCloser(newStorage)
 	c.Request.ContentLength = int64(len(patched))
+	c.Set(frozenTaskModelRewriteKey, spelling)
 	return nil
 }

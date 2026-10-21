@@ -13,13 +13,22 @@ type TaskPluginError struct {
 // orders its keys as an encoded map does; hooks receive it parsed from that
 // text.
 type TaskView struct {
-	CreatedAt  int64  `json:"created_at"`
-	Data       any    `json:"data,omitempty"`
-	FailReason string `json:"fail_reason"`
-	FinishedAt int64  `json:"finished_at,omitempty"`
-	Platform   string `json:"platform"`
-	Progress   string `json:"progress"`
-	Status     string `json:"status"`
-	TaskID     string `json:"task_id"`
-	UpdatedAt  int64  `json:"updated_at,omitempty"`
+	CreatedAt  int64              `json:"created_at"`
+	Data       any                `json:"data,omitempty"`
+	FailReason string             `json:"fail_reason"`
+	FinishedAt int64              `json:"finished_at,omitempty"`
+	Platform   string             `json:"platform"`
+	Progress   string             `json:"progress"`
+	Status     string             `json:"status"`
+	TaskID     string             `json:"task_id"`
+	UpdatedAt  int64              `json:"updated_at,omitempty"`
+	Lifecycle  *TaskLifecycleView `json:"lifecycle,omitempty"`
+}
+
+type TaskLifecycleView struct {
+	Stage      string `json:"stage"`
+	StageAt    int64  `json:"stage_at,omitempty"`
+	NextAction string `json:"next_action,omitempty"`
+	NextDueAt  int64  `json:"next_due_at,omitempty"`
+	Webhook    string `json:"webhook,omitempty"`
 }

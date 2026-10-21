@@ -10,7 +10,7 @@ import (
 func SetVideoRouter(router *gin.Engine) {
 	videoSharedRouter := router.Group("/v1")
 	videoSharedRouter.Use(middleware.RouteTag("relay"))
-	videoSharedRouter.Use(middleware.TokenAuth())
+	videoSharedRouter.Use(middleware.TaskIntakeReplay(controller.PresentDurableTaskReplay), middleware.TokenAuth(), middleware.CaptureTaskOriginalRequest())
 	videoSharedRouter.Use(middleware.SystemPerformanceCheck())
 	videoSharedRouter.POST(
 		"/video/generations",
@@ -25,9 +25,15 @@ func SetVideoRouter(router *gin.Engine) {
 
 	videoV1Router := router.Group("/v1")
 	videoV1Router.Use(middleware.RouteTag("relay"))
-	videoV1Router.Use(middleware.TokenAuth(), middleware.Distribute())
 	{
-		videoV1Router.GET("/video/generations/:task_id", controller.RelayTaskFetch)
-		videoV1Router.POST("/videos/:video_id/remix", controller.RelayTask)
+		videoV1Router.GET("/video/generations/:task_id", middleware.TokenAuthForAcceptedTask("task_id"),
+			func(c *gin.Context) {
+				if controller.TryPresentDurableTaskFetch(c) {
+					c.Abort()
+					return
+				}
+				c.Next()
+			}, middleware.Distribute(), controller.RelayTaskFetch)
+		videoV1Router.POST("/videos/:video_id/remix", middleware.TokenAuth(), middleware.Distribute(), controller.RelayTask)
 	}
 }

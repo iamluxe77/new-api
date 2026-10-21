@@ -198,6 +198,16 @@ func ApplyOriginTaskAffinity(c *gin.Context, info *relaycommon.RelayInfo) *dto.T
 // 构建/发送/解析上游请求 → 提交后计费调整(AdjustBillingOnSubmit)。
 // 共享控制器编排负责未落库退款、最终额度预留、落库和结算。
 func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitResult, *dto.TaskError) {
+	return prepareAndSubmitTask(c, info, false)
+}
+
+// PrepareTaskAdmission runs the same local validation, usage and native price
+// calculation as legacy submit, ending before BillingSession or supplier I/O.
+func PrepareTaskAdmission(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitResult, *dto.TaskError) {
+	return prepareAndSubmitTask(c, info, true)
+}
+
+func prepareAndSubmitTask(c *gin.Context, info *relaycommon.RelayInfo, admissionOnly bool) (*TaskSubmitResult, *dto.TaskError) {
 	info.InitChannelMeta(c)
 
 	// 1. 确定 platform → 创建适配器 → 验证请求
@@ -331,6 +341,12 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
 		info.PriceData.Quota = quota
 		noteTaskQuotaClamp(info, clamp)
+	}
+	if admissionOnly {
+		if pinned, ok := pinnedValue.(jsplugin.PinnedPlugin); !ok || pinned.Plugin == nil || !pinned.Plugin.Meta.DurableSubmit() {
+			return nil, service.TaskErrorWrapperLocal(errors.New("durable task plugin was not pinned"), "task_intake_invalid", http.StatusBadRequest)
+		}
+		return &TaskSubmitResult{Platform: platform, Quota: info.PriceData.Quota}, nil
 	}
 
 	// 7. 预扣费：首次尝试创建计费会话；重试时会话已存在，换到更贵的渠道要在

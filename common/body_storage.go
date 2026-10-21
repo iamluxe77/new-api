@@ -59,6 +59,8 @@ func newMemoryStorage(data []byte) *memoryStorage {
 	}
 }
 
+func NewMemoryBodyStorage(data []byte) BodyStorage { return newMemoryStorage(data) }
+
 func (m *memoryStorage) Read(p []byte) (n int, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

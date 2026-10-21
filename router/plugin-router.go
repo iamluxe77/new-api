@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/gin-gonic/gin"
 )
@@ -116,7 +117,9 @@ func productionPluginRouteHandlers(generation *jsplugin.RoutingGeneration, bindi
 	}
 	return []gin.HandlerFunc{
 		pinRoute,
+		middleware.TaskIntakeReplay(controller.PresentDurableTaskReplay),
 		middleware.TokenAuth(),
+		middleware.CaptureTaskOriginalRequest(),
 		middleware.SystemPerformanceCheck(),
 		middleware.ModelRequestRateLimit(),
 		middleware.PrepareTaskPluginRoute(),
@@ -358,8 +361,15 @@ func pluginRouteRecovery() gin.HandlerFunc {
 }
 
 func (d *pluginRouteDispatcher) dispatch(c *gin.Context) {
+	if c.Request.Method == http.MethodGet && controller.TryPresentDurableNativeQuery(c) {
+		c.Abort()
+		return
+	}
 	generation := d.registry.Generation()
 	if generation == nil || generation.RuntimeHandler() == nil {
+		if !replayUnmatchedPluginRoute(c) {
+			return
+		}
 		c.Next()
 		return
 	}
@@ -391,7 +401,43 @@ func (d *pluginRouteDispatcher) dispatch(c *gin.Context) {
 	} else {
 		delete(c.Keys, middleware.RouteTagKey)
 	}
+	if !replayUnmatchedPluginRoute(c) {
+		return
+	}
 	c.Next()
+}
+
+func replayUnmatchedPluginRoute(c *gin.Context) bool {
+	if c.Request.Method != http.MethodPost {
+		return true
+	}
+	key := c.GetHeader("Idempotency-Key")
+	otherKey := c.GetHeader("X-Idempotency-Key")
+	if key == "" {
+		key = otherKey
+	}
+	if key == "" {
+		return true
+	}
+	// A deleted route has no current binding. Check for a prior claim before
+	// authenticating or reading the body of an unrelated NoRoute request.
+	exists, err := model.HasTaskIntakeClientKey(c.Request.Context(), key, c.Request.Method, c.Request.URL.Path)
+	if err != nil {
+		c.AbortWithStatus(http.StatusServiceUnavailable)
+		return false
+	}
+	if otherKey != "" && otherKey != key {
+		otherExists, otherErr := model.HasTaskIntakeClientKey(c.Request.Context(), otherKey, c.Request.Method, c.Request.URL.Path)
+		if otherErr != nil {
+			c.AbortWithStatus(http.StatusServiceUnavailable)
+			return false
+		}
+		exists = exists || otherExists
+	}
+	if !exists {
+		return true
+	}
+	return middleware.TryTaskIntakeReplay(c, controller.PresentDurableTaskReplay)
 }
 
 type gatedResponseWriter struct {

@@ -22,6 +22,14 @@ import type { SecuritySettings } from '../types'
 export type RetrySettings = {
   RetryTimes: number
   AutomaticRetryStatusCodes: string
+  DurableTaskAttemptBudget: number
+  DurableTaskSuccessorDelaySeconds: number
+  DurableTaskReconcileDelaySeconds: number
+  DurableTaskReplayInitialDelaySeconds: number
+  DurableTaskReplayMaxDelaySeconds: number
+  DurableTaskReplayJitterSeconds: number
+  DurableTaskUncertainRetryEnabled: boolean
+  DurableTaskUncertainRetryDelaySeconds: number
 }
 export type HealthSettings = {
   ChannelDisableThreshold: string
@@ -48,6 +56,14 @@ export type RequestPolicySettings = RetrySettings &
 
 export const defaultRequestPolicySettings: RequestPolicySettings = {
   RetryTimes: 0,
+  DurableTaskAttemptBudget: 2,
+  DurableTaskSuccessorDelaySeconds: 1,
+  DurableTaskReconcileDelaySeconds: 15,
+  DurableTaskReplayInitialDelaySeconds: 60,
+  DurableTaskReplayMaxDelaySeconds: 3840,
+  DurableTaskReplayJitterSeconds: 10,
+  DurableTaskUncertainRetryEnabled: false,
+  DurableTaskUncertainRetryDelaySeconds: 60,
   AutomaticRetryStatusCodes:
     '100-199,300-399,401-407,409-499,500-503,505-523,525-599',
   ChannelDisableThreshold: '',

@@ -24,6 +24,7 @@ import (
 type RequestPolicySnapshot struct {
 	Affinity        operation_setting.ChannelAffinitySetting
 	RetryTimes      int
+	DurableRetry    TaskRetryPolicy
 	RetryCodes      []operation_setting.StatusCodeRange
 	DisableCodes    []operation_setting.StatusCodeRange
 	DisableKeywords []string
@@ -52,6 +53,14 @@ func requestPolicyDefaultOptions() map[string]string {
 		}
 	}
 	defaults["RetryTimes"] = strconv.Itoa(common.RetryTimes)
+	for key, value := range map[string]string{
+		"DurableTaskAttemptBudget": "2", "DurableTaskSuccessorDelaySeconds": "1",
+		"DurableTaskReconcileDelaySeconds": "15", "DurableTaskReplayInitialDelaySeconds": "60",
+		"DurableTaskReplayMaxDelaySeconds": "3840", "DurableTaskReplayJitterSeconds": "10",
+		"DurableTaskUncertainRetryEnabled": "false", "DurableTaskUncertainRetryDelaySeconds": "60",
+	} {
+		defaults[key] = value
+	}
 	defaults["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
 	defaults["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
 	defaults["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
@@ -69,7 +78,7 @@ func IsRequestPolicyOption(key string) bool {
 		return true
 	}
 	switch key {
-	case "CheckSensitiveEnabled", "CheckSensitiveOnPromptEnabled", "SensitiveWords", "AutomaticEnableChannelEnabled", "ChannelDisableThreshold", "monitor_setting.auto_test_channel_enabled", "monitor_setting.auto_test_channel_minutes", "monitor_setting.channel_test_concurrency", "monitor_setting.channel_test_mode", "RetryTimes", "AutomaticRetryStatusCodes", "AutomaticDisableChannelEnabled", "AutomaticDisableStatusCodes", "AutomaticDisableKeywords":
+	case "CheckSensitiveEnabled", "CheckSensitiveOnPromptEnabled", "SensitiveWords", "AutomaticEnableChannelEnabled", "ChannelDisableThreshold", "monitor_setting.auto_test_channel_enabled", "monitor_setting.auto_test_channel_minutes", "monitor_setting.channel_test_concurrency", "monitor_setting.channel_test_mode", "RetryTimes", "AutomaticRetryStatusCodes", "AutomaticDisableChannelEnabled", "AutomaticDisableStatusCodes", "AutomaticDisableKeywords", "DurableTaskAttemptBudget", "DurableTaskSuccessorDelaySeconds", "DurableTaskReconcileDelaySeconds", "DurableTaskReplayInitialDelaySeconds", "DurableTaskReplayMaxDelaySeconds", "DurableTaskReplayJitterSeconds", "DurableTaskUncertainRetryEnabled", "DurableTaskUncertainRetryDelaySeconds":
 		return true
 	}
 	return false
@@ -129,6 +138,45 @@ func BuildRequestPolicy(options map[string]string) (*RequestPolicySnapshot, erro
 	snapshot.RetryTimes, err = strconv.Atoi(raw["RetryTimes"])
 	if err != nil || snapshot.RetryTimes < 0 || snapshot.RetryTimes == math.MaxInt {
 		return nil, fmt.Errorf("retry times must be a non-negative integer with room for the initial attempt")
+	}
+	for _, field := range []struct {
+		key   string
+		value *int64
+	}{
+		{"DurableTaskSuccessorDelaySeconds", &snapshot.DurableRetry.BackoffMillis},
+		{"DurableTaskReconcileDelaySeconds", &snapshot.DurableRetry.ReconcileDelaySeconds},
+		{"DurableTaskReplayInitialDelaySeconds", &snapshot.DurableRetry.ReplayInitialDelaySeconds},
+		{"DurableTaskReplayMaxDelaySeconds", &snapshot.DurableRetry.ReplayMaxDelaySeconds},
+		{"DurableTaskReplayJitterSeconds", &snapshot.DurableRetry.ReplayJitterSeconds},
+	} {
+		*field.value, err = strconv.ParseInt(raw[field.key], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid durable task policy option: %s", field.key)
+		}
+	}
+	snapshot.DurableRetry.AttemptBudget, err = strconv.Atoi(raw["DurableTaskAttemptBudget"])
+	if err != nil {
+		return nil, fmt.Errorf("invalid durable task attempt budget")
+	}
+	snapshot.DurableRetry.UncertainRetryEnabled, err = strconv.ParseBool(raw["DurableTaskUncertainRetryEnabled"])
+	if err != nil {
+		return nil, fmt.Errorf("invalid durable task uncertain retry setting")
+	}
+	snapshot.DurableRetry.UncertainRetryDelaySeconds, err = strconv.ParseInt(raw["DurableTaskUncertainRetryDelaySeconds"], 10, 64)
+	if err != nil || snapshot.DurableRetry.UncertainRetryDelaySeconds < 60 || snapshot.DurableRetry.UncertainRetryDelaySeconds > 3600 {
+		return nil, fmt.Errorf("durable task uncertain retry delay must be 60..3600 seconds")
+	}
+	if snapshot.DurableRetry.BackoffMillis < 1 || snapshot.DurableRetry.BackoffMillis > 60 {
+		return nil, fmt.Errorf("durable task successor delay must be 1..60 seconds")
+	}
+	snapshot.DurableRetry.BackoffMillis *= 1000
+	if snapshot.DurableRetry.AttemptBudget < 1 || snapshot.DurableRetry.AttemptBudget > 8 ||
+		snapshot.DurableRetry.ReconcileDelaySeconds < 1 || snapshot.DurableRetry.ReconcileDelaySeconds > 3600 ||
+		snapshot.DurableRetry.ReplayInitialDelaySeconds < 30 || snapshot.DurableRetry.ReplayInitialDelaySeconds > 3600 ||
+		snapshot.DurableRetry.ReplayMaxDelaySeconds < snapshot.DurableRetry.ReplayInitialDelaySeconds ||
+		snapshot.DurableRetry.ReplayMaxDelaySeconds > 86400 ||
+		snapshot.DurableRetry.ReplayJitterSeconds < 0 || snapshot.DurableRetry.ReplayJitterSeconds > 60 {
+		return nil, fmt.Errorf("durable task policy is outside supported limits")
 	}
 	snapshot.AutoDisable, err = strconv.ParseBool(raw["AutomaticDisableChannelEnabled"])
 	if err != nil {

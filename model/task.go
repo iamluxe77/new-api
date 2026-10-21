@@ -135,7 +135,8 @@ type TaskPrivateData struct {
 	// declared retainResult: false. The upstream snapshot was never written
 	// and every retrieval surface treats the task as not found. The zero
 	// value keeps historical rows retained and retrievable.
-	ResultDiscarded bool `json:"result_discarded,omitempty"`
+	ResultDiscarded bool   `json:"result_discarded,omitempty"`
+	ResultErrorCode string `json:"result_error_code,omitempty"`
 }
 
 type TaskExecutionSnapshot struct {
@@ -367,6 +368,7 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 	var tasks []*Task
 	err := DB.Where("progress != ?", "100%").
 		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+		Where("NOT EXISTS (SELECT 1 FROM task_intakes WHERE task_intakes.task_id = tasks.id)").
 		Where("submit_time < ?", cutoffUnix).
 		Order("submit_time").
 		Limit(limit).
@@ -381,7 +383,8 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 	var tasks []*Task
 	var err error
 	// get all tasks progress is not 100%
-	err = DB.Where("progress != ?", "100%").Where("status != ?", TaskStatusFailure).Where("status != ?", TaskStatusSuccess).Limit(limit).Order("id").Find(&tasks).Error
+	err = DB.Where("progress != ?", "100%").Where("status != ?", TaskStatusFailure).Where("status != ?", TaskStatusSuccess).
+		Where("NOT EXISTS (SELECT 1 FROM task_intakes WHERE task_intakes.task_id = tasks.id)").Limit(limit).Order("id").Find(&tasks).Error
 	if err != nil {
 		return nil
 	}

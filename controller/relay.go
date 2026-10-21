@@ -492,6 +492,10 @@ func RelayTask(c *gin.Context) {
 		respondTaskSubmissionError(c, taskErr)
 		return
 	}
+	if plugin, _ := durableTaskPlugin(c); plugin != nil {
+		PresentDurableTaskReplay(c, outcome.Task)
+		return
+	}
 	presentTaskSubmission(c, outcome)
 }
 
@@ -501,6 +505,9 @@ func RelayTask(c *gin.Context) {
 // come from c.Request.Context: native task endpoints use the client context,
 // while the Responses bridge supplies an independently bounded context.
 func executeTaskSubmission(c *gin.Context, relayInfo *relaycommon.RelayInfo) (*taskSubmissionOutcome, *taskdto.TaskError) {
+	if plugin, _ := durableTaskPlugin(c); plugin != nil {
+		return executeDurableTaskSubmission(c, relayInfo)
+	}
 	return executeTaskSubmissionWith(c, relayInfo, relay.RelayTaskSubmit)
 }
 

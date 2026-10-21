@@ -28,6 +28,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 
 import { SettingsCard } from '../components/settings-card'
 import { safeNumberFieldProps } from '../utils/numeric-field'
@@ -76,6 +77,61 @@ export function RetrySection() {
               <FormDescription>
                 {t('2xx, 504 and 524 are always excluded.')}
               </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <div className='border-t pt-4'>
+          <h3 className='text-sm font-medium'>{t('Native task retries')}</h3>
+          <p className='text-sm text-muted-foreground'>
+            {t('Applies to newly accepted tasks; existing tasks keep their policy.')}
+          </p>
+        </div>
+        <div className='grid gap-4 sm:grid-cols-2'>
+          {([
+            ['DurableTaskAttemptBudget', 'Supplier attempt budget', 1, 8],
+            ['DurableTaskSuccessorDelaySeconds', 'Safe successor delay (seconds)', 1, 60],
+            ['DurableTaskReconcileDelaySeconds', 'Receipt reconciliation delay (seconds)', 1, 3600],
+            ['DurableTaskReplayInitialDelaySeconds', 'First same-key replay delay (seconds)', 30, 3600],
+            ['DurableTaskReplayMaxDelaySeconds', 'Maximum same-key replay delay (seconds)', 30, 86400],
+            ['DurableTaskReplayJitterSeconds', 'Same-key replay jitter (seconds)', 0, 60],
+          ] as const).map(([name, label, min, max]) => (
+            <FormField
+              key={name}
+              control={form.control}
+              name={name}
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t(label)}</FormLabel>
+                  <FormControl>
+                    <Input type='number' min={min} max={max} step={1} {...safeNumberFieldProps(field)} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          ))}
+        </div>
+        <FormField
+          control={form.control}
+          name='DurableTaskUncertainRetryEnabled'
+          render={({ field }) => (
+            <FormItem className='flex items-center justify-between gap-4 border-t pt-4'>
+              <div>
+                <FormLabel>{t('Allow one uncertain task replacement')}</FormLabel>
+                <FormDescription>{t('Off by default and applies only to new tasks. May create a duplicate supplier generation at operator expense; the client is charged once per task.')}</FormDescription>
+              </div>
+              <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name='DurableTaskUncertainRetryDelaySeconds'
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>{t('Uncertain replacement delay (seconds)')}</FormLabel>
+              <FormControl><Input type='number' min={60} max={3600} step={1} {...safeNumberFieldProps(field)} /></FormControl>
               <FormMessage />
             </FormItem>
           )}

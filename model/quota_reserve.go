@@ -3,10 +3,13 @@ package model
 import (
 	"context"
 	"errors"
+	"math"
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
 )
+
+var errQuotaReserveLost = errors.New("quota reserve lost database balance race")
 
 type cacheQuotaResult int
 
@@ -109,11 +112,18 @@ func persistUserQuotaDelta(id int, delta int) error {
 		addNewRecord(BatchUpdateTypeUserQuota, id, delta)
 		return nil
 	}
-	result := DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota + ?", delta))
+	query := DB.Model(&User{}).Where("id = ?", id)
+	if delta < 0 {
+		query = query.Where("quota >= ?", -delta)
+	}
+	result := query.Update("quota", gorm.Expr("quota + ?", delta))
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected != 1 {
+		if delta < 0 {
+			return errQuotaReserveLost
+		}
 		return gorm.ErrRecordNotFound
 	}
 	return nil
@@ -124,7 +134,11 @@ func persistTokenQuotaDelta(id int, delta int) error {
 		addNewRecord(BatchUpdateTypeTokenQuota, id, delta)
 		return nil
 	}
-	result := DB.Model(&Token{}).Where("id = ?", id).Updates(
+	query := DB.Model(&Token{}).Where("id = ?", id)
+	if delta < 0 {
+		query = query.Where("remain_quota >= ? AND used_quota <= ?", -delta, math.MaxInt64+int64(delta))
+	}
+	result := query.Updates(
 		map[string]any{
 			"remain_quota":  gorm.Expr("remain_quota + ?", delta),
 			"used_quota":    gorm.Expr("used_quota - ?", delta),
@@ -135,6 +149,9 @@ func persistTokenQuotaDelta(id int, delta int) error {
 		return result.Error
 	}
 	if result.RowsAffected != 1 {
+		if delta < 0 {
+			return errQuotaReserveLost
+		}
 		return gorm.ErrRecordNotFound
 	}
 	return nil
@@ -192,6 +209,9 @@ func TryReserveUserQuota(id int, quota int) (bool, error) {
 		if compensateErr != nil || compensated != cacheQuotaOK {
 			common.SysError(common.LogText("failed to compensate reserved user quota: result=%d error=%v", compensated, compensateErr))
 		}
+		if errors.Is(err, errQuotaReserveLost) {
+			return false, nil
+		}
 		return false, err
 	}
 	return true, nil
@@ -232,6 +252,9 @@ func TryReserveTokenQuota(id int, key string, quota int, unlimited bool) (bool, 
 		compensated, compensateErr := cacheApplyTokenQuotaDelta(id, key, int64(quota))
 		if compensateErr != nil || compensated != cacheQuotaOK {
 			common.SysError(common.LogText("failed to compensate reserved token quota: result=%d error=%v", compensated, compensateErr))
+		}
+		if errors.Is(err, errQuotaReserveLost) {
+			return false, nil
 		}
 		return false, err
 	}
